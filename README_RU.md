@@ -1,6 +1,8 @@
-﻿# Safe Release Patch Kit
+[English](README.md) | [Русский](README_RU.md)
 
-Этот релиз содержит только безопасные разделенные патчи для Yandex Browser.
+# Safe Release Patch Kit
+
+Этот репозиторий содержит безопасный release-набор патчей для Yandex Browser.
 
 ## Главное
 - `PatchKit Launcher.exe`
@@ -11,12 +13,13 @@
   - предупреждение, если Yandex Browser открыт
   - отдельная кнопка закрытия браузера
   - прокручиваемый список действий
-- `apply_all.cmd`
-  - последовательно запускает все safe-слои
-- `verify_all.cmd`
-  - последовательно проверяет все safe-слои
-- `restore_all.cmd`
-  - откатывает new tab backup и banner backup
+- GitHub Release:
+  - `https://github.com/VolcharaVasiliy/yandex-ntp-debug-release/releases/tag/v2026.03.06-standalone`
+
+## Очень рекомендуется
+- Очень рекомендуется установить [Ghostery Privacy Ad Blocker](https://chromewebstore.google.com/detail/ghostery-%D0%B0%D0%BD%D1%82%D0%B8%D0%B1%D0%B0%D0%BD%D0%BD%D0%B5%D1%80/mlomiejdfkolichcflejclcbmpeaniij).
+- Для этого набора патчей это один из самых полезных дополнительных компонентов для чистого и удобного браузера.
+- Спасибо команде Ghostery за отличное расширение и постоянную поддержку продукта.
 
 ## Что входит в safe-слои
 - `run_apply_context_safe.ps1`
