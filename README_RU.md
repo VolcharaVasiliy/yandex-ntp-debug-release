@@ -1,28 +1,66 @@
-# Safe Release Patch Kit
+﻿# Safe Release Patch Kit
 
-Этот релиз содержит только безопасные разделенные патчи.
+Этот релиз содержит только безопасные разделенные патчи для Yandex Browser.
 
-## Что есть
+## Главное
+- `PatchKit Launcher.exe`
+  - полностью standalone: можно скачать один `.exe` и запускать без установки Python и без соседних `.ps1/.cmd`
+  - встроенные `scripts/*.py` уже упакованы внутрь EXE
+  - графический launcher с нормальными подписями
+  - запуск действий кнопкой или по номеру
+  - предупреждение, если Yandex Browser открыт
+  - отдельная кнопка закрытия браузера
+  - прокручиваемый список действий
+- `apply_all.cmd`
+  - последовательно запускает все safe-слои
+- `verify_all.cmd`
+  - последовательно проверяет все safe-слои
+- `restore_all.cmd`
+  - откатывает new tab backup и banner backup
+
+## Что входит в safe-слои
 - `run_apply_context_safe.ps1`
   - Google для выделенного текста
   - `Спросить ChatGPT` в popup
-  - popup-иконки Google/OpenAI
+  - рабочие popup-иконки Google/OpenAI
 - `run_apply_ntp_link_only.ps1`
   - меняет только ссылку верхней Alice-кнопки на новой вкладке
   - не меняет текст, иконки, `apps.json`, `resources.pak`, locale chunks
 - `run_disable_ntp_banner.ps1`
-  - отдельно отключает рекламный баннер/виджеты новой вкладки
+  - отдельно отключает рекламный баннер и виджеты новой вкладки
 
 ## Чего здесь нет
 - Нет старого broad-патча, который одновременно правил `ru.pak`, `resources.pak`, `apps.json`, locale chunks и web app config для новой вкладки.
-- Эти старые release entrypoint-скрипты из релиза удалены.
+- Старые release entrypoint-скрипты удалены из релиза.
 
 ## Быстрый запуск
-1. Закрыть Yandex Browser.
-2. Запустить `apply_all.cmd`.
-3. Запустить `verify_all.cmd`.
+1. Скачать один файл `PatchKit Launcher.exe`.
+2. Запустить его на ПК, где уже установлен Yandex Browser.
+3. При необходимости launcher сам предупредит, что браузер открыт, и предложит закрыть его.
+4. Выбрать нужное действие.
+5. Для полного применения выбрать `1. Применить все`.
+6. Для полной проверки выбрать `2. Проверить все`.
 
-## Ручной запуск по слоям
+## Что нужно на чистом ПК
+- Windows с PowerShell
+- установленный Yandex Browser в обычном профиле пользователя
+- больше ничего ставить не нужно
+
+## Действия в launcher
+1. `Применить все`
+2. `Проверить все`
+3. `Закрыть Yandex Browser`
+4. `Применить Context Safe`
+5. `Применить NTP Link Only`
+6. `Отключить NTP Banner`
+7. `Проверить Context Safe`
+8. `Проверить NTP Link Only`
+9. `Проверить NTP Banner`
+10. `Откатить New Tab Backup`
+11. `Откатить Banner Backup`
+12. `Откатить все`
+
+## Ручной запуск без launcher
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\run_apply_context_safe.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File .\run_apply_ntp_link_only.ps1
@@ -43,6 +81,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\run_verify_ntp_banner.ps1
   - `run_restore_newtab_backup.ps1`
   - `run_restore_ntp_banner.ps1`
 
-## Состав релиза
-- `scripts\shared_patchlib.py` используется только как библиотека для safe-скриптов.
-- Не запускать `shared_patchlib.py` напрямую.
+## Сборка launcher из Python
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\build_patchkit_launcher.ps1
+```
+
+Исходник launcher: `patchkit_launcher.py`.
