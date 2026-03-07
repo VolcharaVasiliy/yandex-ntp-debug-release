@@ -2,16 +2,19 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import ctypes
 import io
 import json
 import os
 import queue
 import runpy
+import signal
 import subprocess
 import sys
 import threading
 import time
 import traceback
+from ctypes import wintypes
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -35,6 +38,75 @@ YANDEX_LOCAL_ROOT = (
     / "Yandex"
     / "YandexBrowser"
 ).resolve()
+user32 = ctypes.WinDLL("user32", use_last_error=True)
+
+WH_KEYBOARD_LL = 13
+HC_ACTION = 0
+WM_KEYDOWN = 0x0100
+WM_KEYUP = 0x0101
+WM_SYSKEYDOWN = 0x0104
+WM_SYSKEYUP = 0x0105
+VK_SCROLL = 0x91
+VK_SNAPSHOT = 0x2C
+KEYEVENTF_KEYUP = 0x0002
+LLKHF_INJECTED = 0x0010
+VERIFY_SCROLLLOCK_EXTRAINFO = 0x53434C4B
+VERIFY_PRINTSCREEN_EXTRAINFO = 0x50525453
+
+ULONG_PTR = wintypes.WPARAM
+LRESULT = wintypes.LPARAM
+
+
+class KBDLLHOOKSTRUCT(ctypes.Structure):
+    _fields_ = [
+        ("vkCode", wintypes.DWORD),
+        ("scanCode", wintypes.DWORD),
+        ("flags", wintypes.DWORD),
+        ("time", wintypes.DWORD),
+        ("dwExtraInfo", ULONG_PTR),
+    ]
+
+
+LowLevelKeyboardProc = ctypes.WINFUNCTYPE(
+    LRESULT,
+    ctypes.c_int,
+    wintypes.WPARAM,
+    wintypes.LPARAM,
+)
+
+user32.SetWindowsHookExW.argtypes = [
+    ctypes.c_int,
+    LowLevelKeyboardProc,
+    wintypes.HINSTANCE,
+    wintypes.DWORD,
+]
+user32.SetWindowsHookExW.restype = wintypes.HHOOK
+user32.CallNextHookEx.argtypes = [
+    wintypes.HHOOK,
+    ctypes.c_int,
+    wintypes.WPARAM,
+    wintypes.LPARAM,
+]
+user32.CallNextHookEx.restype = LRESULT
+user32.UnhookWindowsHookEx.argtypes = [wintypes.HHOOK]
+user32.UnhookWindowsHookEx.restype = wintypes.BOOL
+user32.keybd_event.argtypes = [
+    wintypes.BYTE,
+    wintypes.BYTE,
+    wintypes.DWORD,
+    ULONG_PTR,
+]
+user32.keybd_event.restype = None
+user32.GetMessageW.argtypes = [
+    ctypes.POINTER(wintypes.MSG),
+    wintypes.HWND,
+    wintypes.UINT,
+    wintypes.UINT,
+]
+user32.GetMessageW.restype = wintypes.BOOL
+
+SCROLLLOCK_HOOK_HANDLE = None
+SCROLLLOCK_HOOK_PROC = None
 
 
 @dataclass(frozen=True)
@@ -95,6 +167,67 @@ def resolve_scripts_dir() -> Path:
     if bundled.exists():
         return bundled
     return resolve_base_dir() / "scripts"
+
+
+def send_print_screen(key_up: bool, extra_info: int) -> None:
+    user32.keybd_event(
+        VK_SNAPSHOT,
+        0,
+        KEYEVENTF_KEYUP if key_up else 0,
+        extra_info,
+    )
+
+
+def request_remap_stop(*_args) -> None:
+    user32.PostQuitMessage(0)
+
+
+@LowLevelKeyboardProc
+def scrolllock_keyboard_proc(n_code: int, w_param: int, l_param: int) -> int:
+    if n_code == HC_ACTION:
+        keyboard = ctypes.cast(l_param, ctypes.POINTER(KBDLLHOOKSTRUCT)).contents
+        is_injected = bool(keyboard.flags & LLKHF_INJECTED)
+        is_verify_scrolllock = keyboard.dwExtraInfo == VERIFY_SCROLLLOCK_EXTRAINFO
+        if keyboard.vkCode == VK_SCROLL and (not is_injected or is_verify_scrolllock):
+            printscreen_extra = (
+                VERIFY_PRINTSCREEN_EXTRAINFO if is_verify_scrolllock else 0
+            )
+            if w_param in (WM_KEYDOWN, WM_SYSKEYDOWN):
+                send_print_screen(key_up=False, extra_info=printscreen_extra)
+                return 1
+            if w_param in (WM_KEYUP, WM_SYSKEYUP):
+                send_print_screen(key_up=True, extra_info=printscreen_extra)
+                return 1
+    return user32.CallNextHookEx(SCROLLLOCK_HOOK_HANDLE, n_code, w_param, l_param)
+
+
+def run_scrolllock_remap_daemon() -> int:
+    global SCROLLLOCK_HOOK_HANDLE
+    global SCROLLLOCK_HOOK_PROC
+
+    signal.signal(signal.SIGINT, request_remap_stop)
+    if hasattr(signal, "SIGTERM"):
+        signal.signal(signal.SIGTERM, request_remap_stop)
+
+    SCROLLLOCK_HOOK_PROC = scrolllock_keyboard_proc
+    SCROLLLOCK_HOOK_HANDLE = user32.SetWindowsHookExW(
+        WH_KEYBOARD_LL,
+        SCROLLLOCK_HOOK_PROC,
+        None,
+        0,
+    )
+    if not SCROLLLOCK_HOOK_HANDLE:
+        raise ctypes.WinError(ctypes.get_last_error())
+
+    message = wintypes.MSG()
+    while user32.GetMessageW(ctypes.byref(message), None, 0, 0) != 0:
+        user32.TranslateMessage(ctypes.byref(message))
+        user32.DispatchMessageW(ctypes.byref(message))
+
+    if SCROLLLOCK_HOOK_HANDLE:
+        user32.UnhookWindowsHookEx(SCROLLLOCK_HOOK_HANDLE)
+        SCROLLLOCK_HOOK_HANDLE = None
+    return 0
 
 
 def build_actions() -> list[Action]:
@@ -174,7 +307,7 @@ def build_actions() -> list[Action]:
         Action(
             9,
             "Проверить NTP Banner",
-            "Проверяет флаги отключения banner-off без изменения профиля.",
+            "Только проверяет флаги отключения banner-off и ничего не меняет в профиле.",
             "sequence",
             (ScriptRun("verify_ntp_banner_disabled.py"),),
             False,
@@ -204,6 +337,30 @@ def build_actions() -> list[Action]:
                 ScriptRun("restore_newtab_backup.py"),
                 ScriptRun("restore_ntp_banner_backup.py"),
             ),
+            True,
+        ),
+        Action(
+            13,
+            "Применить Screenshot ScrollLock",
+            "Меняет screenshoter и ya.screenshoter на ScrollLock, обновляет подписи PrtScr в настройках/панели и включает физический remap ScrollLock -> PrintScreen.",
+            "sequence",
+            (ScriptRun("apply_screenshot_hotkey_scrolllock.py"),),
+            True,
+        ),
+        Action(
+            14,
+            "Проверить Screenshot ScrollLock",
+            "Проверяет Local State, ya.screenshoter, UI-подписи в browser.dll/ru.pak, автозапуск remap и физическую работу ScrollLock -> PrintScreen.",
+            "sequence",
+            (ScriptRun("verify_screenshot_hotkey_scrolllock.py"),),
+            False,
+        ),
+        Action(
+            15,
+            "Откатить Screenshot ScrollLock",
+            "Восстанавливает hotkey скриншотера и подписи UI из backup или в дефолт и отключает remap ScrollLock.",
+            "sequence",
+            (ScriptRun("restore_screenshot_hotkey_scrolllock.py"),),
             True,
         ),
     ]
@@ -367,6 +524,62 @@ def build_self_test(base_dir: Path, actions: list[Action]) -> dict[str, Any]:
         "missing_files": missing_files,
         "standalone_ready": len(missing_files) == 0,
     }
+
+
+def build_failure_dialog(action: Action, return_code: int) -> tuple[str, str]:
+    browser_running = bool(get_yandex_processes())
+    browser_hint = ""
+    if browser_running:
+        browser_hint = (
+            "\n\nСейчас Yandex Browser открыт. Пока он запущен, профиль и Local State могут "
+            "перезаписываться самим браузером."
+        )
+
+    if action.number == 9 and return_code == 2:
+        return (
+            "warning",
+            "Пункт 9 ничего не меняет. Он только проверяет состояние banner-off.\n\n"
+            "Сейчас проверка не пройдена. Обычно нужно:\n"
+            "1. закрыть Yandex Browser;\n"
+            "2. запустить пункт 6 «Отключить NTP Banner»;\n"
+            "3. потом снова запустить пункт 9.\n\n"
+            "Подробности смотри в журнале справа."
+            + browser_hint,
+        )
+
+    if action.number == 2 and return_code == 2:
+        return (
+            "warning",
+            "Общая проверка не пройдена: хотя бы один safe-слой сейчас не соответствует "
+            "ожидаемому состоянию.\n\nПодробности смотри в журнале справа."
+            + browser_hint,
+        )
+
+    if action.number in {7, 8} and return_code == 2:
+        return (
+            "warning",
+            f"Проверка не пройдена: {action.title}.\n\n"
+            "Этот пункт ничего не меняет, а только проверяет текущее состояние.\n"
+            "Подробности смотри в журнале справа."
+            + browser_hint,
+        )
+
+    if action.number == 14 and return_code == 2:
+        return (
+            "warning",
+            "Проверка screenshot-слоя не пройдена.\n\n"
+            "Обычно это значит, что не совпали значения в Local State / ya.screenshoter, "
+            "не обновились UI-подписи в browser.dll или ru.pak, не включен автозапуск remap "
+            "или не работает физический ScrollLock -> PrintScreen.\n\n"
+            "Подробности смотри в журнале справа."
+            + browser_hint,
+        )
+
+    return (
+        "error",
+        f"Действие завершилось с кодом {return_code}:\n{action.title}\n\n"
+        "Подробности смотри в журнале справа.",
+    )
 
 
 class LauncherApp:
@@ -750,25 +963,25 @@ class LauncherApp:
         if action.requires_browser_closed:
             processes = get_yandex_processes()
             if processes:
-                decision = messagebox.askyesnocancel(
+                decision = messagebox.askyesno(
                     WINDOW_TITLE,
                     "Yandex Browser сейчас открыт.\n\n"
+                    "Для этого действия продолжение без закрытия запрещено, "
+                    "иначе браузер может сразу перезаписать Local State и другие файлы.\n\n"
                     "Да  -> закрыть браузер и продолжить\n"
-                    "Нет -> продолжить без закрытия\n"
-                    "Отмена -> не запускать действие",
+                    "Нет -> отменить запуск действия",
                 )
-                if decision is None:
+                if not decision:
                     return
-                if decision:
-                    try:
-                        closed = close_yandex_browser()
-                        self.append_log(
-                            f"[launcher] Закрыто процессов Yandex Browser: {closed}\n"
-                        )
-                        self.refresh_browser_status()
-                    except Exception as exc:
-                        messagebox.showerror(WINDOW_TITLE, f"Не удалось закрыть браузер:\n{exc}")
-                        return
+                try:
+                    closed = close_yandex_browser()
+                    self.append_log(
+                        f"[launcher] Закрыто процессов Yandex Browser: {closed}\n"
+                    )
+                    self.refresh_browser_status()
+                except Exception as exc:
+                    messagebox.showerror(WINDOW_TITLE, f"Не удалось закрыть браузер:\n{exc}")
+                    return
 
         self._start_external_action(action)
 
@@ -839,10 +1052,11 @@ class LauncherApp:
                     self.status_var.set(
                         f"Ошибка {return_code}: {action.number}. {action.title}"
                     )
-                    messagebox.showerror(
-                        WINDOW_TITLE,
-                        f"Действие завершилось с кодом {return_code}:\n{action.title}",
-                    )
+                    dialog_kind, dialog_text = build_failure_dialog(action, return_code)
+                    if dialog_kind == "warning":
+                        messagebox.showwarning(WINDOW_TITLE, dialog_text)
+                    else:
+                        messagebox.showerror(WINDOW_TITLE, dialog_text)
                 self.running_action = None
                 self.worker = None
                 self.set_busy(False)
@@ -878,6 +1092,11 @@ class LauncherApp:
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=WINDOW_TITLE)
     parser.add_argument(
+        "--scrolllock-remap-daemon",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
         "--self-test",
         action="store_true",
         help="Run a non-GUI launcher self-test and print JSON to stdout.",
@@ -894,6 +1113,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
     base_dir = resolve_base_dir()
     actions = build_actions()
+
+    if args.scrolllock_remap_daemon:
+        return run_scrolllock_remap_daemon()
 
     if args.self_test or args.self_test_output:
         payload = build_self_test(base_dir, actions)

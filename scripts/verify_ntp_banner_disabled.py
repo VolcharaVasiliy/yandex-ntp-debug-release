@@ -67,6 +67,7 @@ def main() -> int:
         return 1
 
     failed = False
+    failed_labels: list[str] = []
     print(f"[info] profile: {args.profile}")
     print("[Preferences]")
 
@@ -96,6 +97,8 @@ def main() -> int:
     for label, actual, expected in checks:
         ok = actual == expected
         failed = failed or (not ok)
+        if not ok:
+            failed_labels.append(label)
         print(
             f"  - {'OK' if ok else 'FAIL'} {label}: actual={actual!r}, expected={expected!r}"
         )
@@ -104,6 +107,8 @@ def main() -> int:
     hide_time_actual = get_nested(local_state_data, ("ya", "ntp", "banner", "hide_time"))
     hide_time_ok = hide_time_actual == MAX_HIDE_TIME
     failed = failed or (not hide_time_ok)
+    if not hide_time_ok:
+        failed_labels.append("ya.ntp.banner.hide_time")
     print(
         "  - "
         f"{'OK' if hide_time_ok else 'FAIL'} "
@@ -139,6 +144,8 @@ def main() -> int:
         for label, actual, expected in feature_checks:
             ok = actual == expected
             failed = failed or (not ok)
+            if not ok:
+                failed_labels.append(f"feature {label}")
             print(
                 f"  - {'OK' if ok else 'FAIL'} feature {label}: "
                 f"actual={actual!r}, expected={expected!r}"
@@ -147,6 +154,14 @@ def main() -> int:
         print("  - WARN StaffForceRedesign.features not found")
 
     if failed:
+        print("[HINT] Пункт проверки ничего не меняет. Он только читает текущие флаги профиля.")
+        if "feature NTPW_browser_promo.enabled" in failed_labels:
+            print(
+                "[HINT] Закройте Yandex Browser, выполните пункт 6 "
+                "'Отключить NTP Banner', затем повторите пункт 9."
+            )
+        else:
+            print("[HINT] Выполни пункт 6 'Отключить NTP Banner', затем повтори проверку.")
         print("[RESULT] FAIL")
         return 2
 
