@@ -76,16 +76,11 @@ SEARCH_REPLACEMENTS = [
         "instaserp_ask_ai_button_url",
     ),
     (
-        b"https://alice.yandex.ru/"
-        + (b"\x00" * 8)
-        + b"utm_campaign=ntp&utm_source=desktop_browser"
-        + (b"\x00" * 5)
-        + b"utm_campaign=ntp_new_chat_btn&utm_source=desktop_browser",
-        b"https://chatgpt.com/////"
-        + (b"\x00" * 8)
-        + b"utm_campaign=ntp&utm_source=desktop_browser"
-        + (b"\x00" * 5)
-        + b"utm_campaign=ntp_new_chat_btn&utm_source=desktop_browser",
+        # Since 26.8 the NTP default URL is assembled from separate NUL-padded
+        # strings: base URL, campaigns ("ntp", "ntp_new_chat_btn") and param
+        # names. Only the base URL needs to move to keep the same length.
+        b"https://alice.yandex.ru/\x00ntp\x00\x00\x00\x00ntp_new_chat_btn\x00",
+        b"https://chatgpt.com/////\x00ntp\x00\x00\x00\x00ntp_new_chat_btn\x00",
         "ntp_topbar_chatgpt_default_url_cluster",
     ),
 ]
@@ -117,6 +112,15 @@ ASK_CHATGPT_LABEL_WITH_ARG = ASK_CHATGPT_VISIBLE_LABEL_WITH_ARG + ASK_CHATGPT_FI
 ASK_CHATGPT_LABEL_WITH_ARG_GUILLEMETS = (
     ASK_CHATGPT_VISIBLE_LABEL_WITH_ARG_GUILLEMETS + ASK_CHATGPT_FILLER
 )
+
+# Since 26.8 ru.pak contains the smartbox placeholder "Найти в Яндексе или
+# спросить Алису", which also matches OLD_LABEL as a substring. In the
+# selection context-menu resource the "Найти в Яндексе" label sits directly
+# before "Спросить Алису AI", so the adjacent pair is the only unambiguous
+# anchor for the context-menu label.
+CONTEXT_JOINT_STOCK = OLD_LABEL + ASK_ALICE_LABEL
+CONTEXT_JOINT_PATCHED_LABEL_ONLY = NEW_LABEL + ASK_ALICE_LABEL
+CONTEXT_JOINT_PATCHED = NEW_LABEL + ASK_CHATGPT_LABEL
 
 NTP_CACHE_SUBDIR = Path("ntp") / "NativeCacheStorage" / "web_ntp_cache"
 NTP_BUNDLE_SIGNATURES = (
@@ -210,6 +214,11 @@ NTP_LOCALE_MARKERS = (
 
 ICON_PACK_FILES = ("browser_100_percent.pak", "browser_200_percent.pak")
 ICON_RESOURCE_ID = 175
+# Since 26.8 the copysearch button icons carry an embedded SVG source instead
+# of vector paint commands: entry field 8 wraps {scale, svg_text}.
+ICON_SVG_WRAPPER_FIELD = 8
+ICON_SVG_DATA_FIELD = 2
+ICON_SVG_SCALE_VALUE = 200
 ICON_ENTRY_GOOGLE_SOURCE = "search_engine_dialog_google"
 ICON_SEARCH_TARGET_ENTRY = "copysearch_search_button_small"
 ICON_ASK_TARGET_ENTRY = "copysearch_alice_button_small"
@@ -299,7 +308,7 @@ NTP_RU_EXACT_PAYLOAD_REPLACEMENTS = (
 )
 
 NTP_ALICE_LOGO_COMMON_PATH = b"static/media/common/images/alice_logo.svg"
-NTP_ALICE_NEW_CHAT_TOOL_PATH = b"static/media/common/images/alice_chat_tool_new_chat.svg"
+NTP_ALICE_NEW_CHAT_TOOL_PATH = b"static/media/common/images/alice_chats_tool_new_chat.svg"
 NTP_TOP_BAR_ALICE_OKNYX_PATH = (
     b"static/media/components/ntp_top_bar/images/alice_oknyx.svg"
 )
@@ -559,31 +568,50 @@ def patch_browser_dll(path: Path) -> list[str]:
     return logs
 
 
-def patch_ru_pak(path: Path) -> list[str]:
-    data = path.read_bytes()
-    logs: list[str] = []
-
+def patch_context_menu_label(data: bytes) -> tuple[bytes, str]:
     old_count = data.count(OLD_LABEL)
     legacy_count = data.count(LEGACY_PATCHED_LABEL)
     previous_new_count = data.count(PREVIOUS_NEW_LABEL)
     new_count = data.count(NEW_LABEL)
+    joint_stock = data.count(CONTEXT_JOINT_STOCK)
+    joint_patched = (
+        data.count(CONTEXT_JOINT_PATCHED_LABEL_ONLY) + data.count(CONTEXT_JOINT_PATCHED)
+    )
 
-    if old_count == 1 and legacy_count == 0 and previous_new_count == 0 and new_count == 0:
-        data = data.replace(OLD_LABEL, NEW_LABEL, 1)
-        logs.append("patched (context_menu_label from stock)")
-    elif old_count == 0 and legacy_count >= 1 and previous_new_count == 0 and new_count == 0:
-        data = data.replace(LEGACY_PATCHED_LABEL, NEW_LABEL, 1)
-        logs.append("patched (context_menu_label migrated from legacy padded label)")
-    elif old_count == 0 and legacy_count == 0 and previous_new_count >= 1 and new_count == 0:
-        data = data.replace(PREVIOUS_NEW_LABEL, NEW_LABEL, 1)
-        logs.append("patched (context_menu_label migrated from previous patched label)")
-    elif old_count == 0 and legacy_count == 0 and previous_new_count == 0 and new_count >= 1:
-        logs.append("already patched (context_menu_label)")
-    else:
-        raise ValueError(
-            "Unexpected pattern count for context_menu_label: "
-            f"old={old_count}, legacy={legacy_count}, previous={previous_new_count}, new={new_count}"
+    if joint_stock == 1 and legacy_count == 0 and previous_new_count == 0 and new_count == 0:
+        return (
+            data.replace(CONTEXT_JOINT_STOCK, CONTEXT_JOINT_PATCHED_LABEL_ONLY, 1),
+            "patched (context_menu_label from stock)",
         )
+    if (
+        joint_stock == 0
+        and legacy_count == 0
+        and previous_new_count == 0
+        and joint_patched >= 1
+        and new_count >= 1
+    ):
+        return data, "already patched (context_menu_label)"
+    if old_count == 1 and legacy_count == 0 and previous_new_count == 0 and new_count == 0 and joint_stock == 0:
+        return data.replace(OLD_LABEL, NEW_LABEL, 1), "patched (context_menu_label from stock, unique label)"
+    if old_count == 0 and legacy_count >= 1 and previous_new_count == 0 and new_count == 0:
+        return data.replace(LEGACY_PATCHED_LABEL, NEW_LABEL, 1), "patched (context_menu_label migrated from legacy padded label)"
+    if old_count == 0 and legacy_count == 0 and previous_new_count >= 1 and new_count == 0:
+        return data.replace(PREVIOUS_NEW_LABEL, NEW_LABEL, 1), "patched (context_menu_label migrated from previous patched label)"
+
+    raise ValueError(
+        "Unexpected pattern counts for context_menu_label: "
+        f"old={old_count}, legacy={legacy_count}, previous={previous_new_count}, "
+        f"new={new_count}, joint_stock={joint_stock}, joint_patched={joint_patched}"
+    )
+
+
+def patch_ru_pak(path: Path) -> list[str]:
+    data = path.read_bytes()
+    logs: list[str] = []
+
+    label_data, label_msg = patch_context_menu_label(data)
+    data = label_data
+    logs.append(label_msg)
 
     data, ask_with_arg_msg = patch_multi(
         data,
@@ -1469,9 +1497,9 @@ def normalize_icon_subpaths(
     return normalized
 
 
-def build_google_g_icon_payload(source_payload: bytes) -> bytes:
+def google_g_transformed_commands(source_payload: bytes) -> tuple[list[int], list[float]]:
     source_fields = parse_proto_fields(source_payload)
-    width_index, height_index, style_index, args_index = extract_icon_payload_indexes(
+    _width_index, _height_index, style_index, args_index = extract_icon_payload_indexes(
         source_fields
     )
 
@@ -1527,11 +1555,113 @@ def build_google_g_icon_payload(source_payload: bytes) -> bytes:
         else:
             transformed_args.append((value - min_y) * scale + ICON_G_MARGIN)
 
+    return first_path_commands, transformed_args
+
+
+def build_google_g_icon_payload(source_payload: bytes) -> bytes:
+    source_fields = parse_proto_fields(source_payload)
+    width_index, height_index, style_index, args_index = extract_icon_payload_indexes(
+        source_fields
+    )
+    commands, transformed_args = google_g_transformed_commands(source_payload)
+
     source_fields[width_index][2] = ICON_TARGET_INNER_SIZE
     source_fields[height_index][2] = ICON_TARGET_INNER_SIZE
-    source_fields[style_index][2] = bytes(first_path_commands)
+    source_fields[style_index][2] = bytes(commands)
     source_fields[args_index][2] = pack_float32_array(transformed_args)
     return encode_proto_fields(source_fields)
+
+
+def icon_commands_to_svg_path_data(commands: list[int], args: list[float]) -> str:
+    def fmt(value: float) -> str:
+        text = f"{value:.3f}".rstrip("0").rstrip(".")
+        return text if text else "0"
+
+    parts: list[str] = []
+    arg_pos = 0
+    for command in commands:
+        arg_count = ICON_CMD_ARG_COUNT.get(command)
+        if arg_count is None:
+            raise ValueError(f"Unsupported icon command in SVG export: {command}")
+        if command not in ICON_GEOMETRY_COMMANDS:
+            # Leading paint commands (e.g. PATH_COLOR_ARGB) have no SVG
+            # equivalent; the target entries use currentColor anyway.
+            if arg_count == 0:
+                continue
+            raise ValueError(f"Unsupported paint command in SVG export: {command}")
+        command_args = args[arg_pos : arg_pos + arg_count]
+        arg_pos += arg_count
+        if command == ICON_CLOSE_CMD:
+            parts.append("Z")
+        elif command == ICON_MOVE_TO_CMD:
+            parts.append(f"M {fmt(command_args[0])} {fmt(command_args[1])}")
+        elif command == ICON_LINE_TO_CMD:
+            parts.append(f"L {fmt(command_args[0])} {fmt(command_args[1])}")
+        elif command == ICON_CUBIC_TO_CMD:
+            parts.append("C " + " ".join(fmt(value) for value in command_args))
+        else:
+            raise ValueError(f"Unsupported icon command in SVG export: {command}")
+    return " ".join(parts)
+
+
+def build_google_g_svg_text(source_payload: bytes) -> bytes:
+    commands, args = google_g_transformed_commands(source_payload)
+    path_data = icon_commands_to_svg_path_data(commands, args)
+    svg = (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32">'
+        f'<path fill="currentColor" d="{path_data}"/></svg>'
+    )
+    return svg.encode("utf-8")
+
+
+def build_openai_svg_text() -> bytes:
+    svg = (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" '
+        'viewBox="0 0 512 512">'
+        f'<path fill="currentColor" d="{OPENAI_UXWING_SVG_PATH}"/></svg>'
+    )
+    return svg.encode("utf-8")
+
+
+def get_icon_entry_svg(entry_fields: list[list[object]]) -> bytes | None:
+    for field_number, wire_type, value in entry_fields:
+        if field_number != ICON_SVG_WRAPPER_FIELD or wire_type != 2:
+            continue
+        for inner_number, inner_wire_type, inner_value in parse_proto_fields(bytes(value)):
+            if inner_number == ICON_SVG_DATA_FIELD and inner_wire_type == 2:
+                return bytes(inner_value)
+    return None
+
+
+def set_icon_entry_svg(
+    entry_fields: list[list[object]],
+    svg_text: bytes,
+) -> list[list[object]]:
+    result: list[list[object]] = []
+    replaced = False
+    for field in entry_fields:
+        field_number, wire_type, value = int(field[0]), int(field[1]), field[2]
+        if (
+            field_number == ICON_SVG_WRAPPER_FIELD
+            and wire_type == 2
+            and not replaced
+        ):
+            new_inner: list[list[object]] = []
+            for inner_number, inner_wire_type, inner_value in parse_proto_fields(
+                bytes(value)
+            ):
+                if inner_number == ICON_SVG_DATA_FIELD and inner_wire_type == 2:
+                    new_inner.append([inner_number, inner_wire_type, svg_text])
+                    replaced = True
+                else:
+                    new_inner.append([inner_number, inner_wire_type, inner_value])
+            if replaced:
+                result.append([field_number, wire_type, encode_proto_fields(new_inner)])
+                continue
+        result.append([field_number, wire_type, value])
+    if not replaced:
+        raise ValueError("Icon entry has no embedded SVG wrapper field")
+    return result
 
 
 def build_custom_svg_icon_payload(template_payload: bytes, svg_path_data: str) -> bytes:
@@ -1565,11 +1695,9 @@ def patch_copysearch_icon_blob(blob: bytes) -> tuple[bytes, str]:
 
     search_target_index: int | None = None
     search_target_fields: list[list[object]] | None = None
-    search_target_path_index: int | None = None
 
     ask_target_index: int | None = None
     ask_target_fields: list[list[object]] | None = None
-    ask_target_path_index: int | None = None
 
     for top_idx, (field_number, wire_type, value) in enumerate(top_fields):
         if field_number != 2 or wire_type != 2:
@@ -1579,54 +1707,55 @@ def patch_copysearch_icon_blob(blob: bytes) -> tuple[bytes, str]:
             source_index = top_idx
             source_fields = entry_fields
             source_path_index = path_field_index
-        elif name == ICON_SEARCH_TARGET_ENTRY and path_field_index is not None:
+        elif name == ICON_SEARCH_TARGET_ENTRY and search_target_fields is None:
             search_target_index = top_idx
             search_target_fields = entry_fields
-            search_target_path_index = path_field_index
-        elif name == ICON_ASK_TARGET_ENTRY and path_field_index is not None:
+        elif name == ICON_ASK_TARGET_ENTRY and ask_target_fields is None:
             ask_target_index = top_idx
             ask_target_fields = entry_fields
-            ask_target_path_index = path_field_index
 
     if source_index is None or source_fields is None or source_path_index is None:
         raise ValueError(
             "Could not locate required icon entries "
             f"(source={ICON_ENTRY_GOOGLE_SOURCE})"
         )
-    if (
-        search_target_index is None
-        or search_target_fields is None
-        or search_target_path_index is None
-    ):
+    if search_target_index is None or search_target_fields is None:
         raise ValueError(
             "Could not locate required icon entries "
             f"(target={ICON_SEARCH_TARGET_ENTRY})"
         )
-    if ask_target_index is None or ask_target_fields is None or ask_target_path_index is None:
+    if ask_target_index is None or ask_target_fields is None:
         raise ValueError(
             "Could not locate required icon entries "
             f"(target={ICON_ASK_TARGET_ENTRY})"
         )
 
     source_path = bytes(source_fields[source_path_index][2])
-    google_g_path = build_google_g_icon_payload(source_path)
+    current_search_svg = get_icon_entry_svg(search_target_fields)
+    current_ask_svg = get_icon_entry_svg(ask_target_fields)
+    if current_search_svg is None:
+        raise ValueError(
+            f"Icon entry {ICON_SEARCH_TARGET_ENTRY} has no embedded SVG "
+            "(unexpected icon pack layout)"
+        )
+    if current_ask_svg is None:
+        raise ValueError(
+            f"Icon entry {ICON_ASK_TARGET_ENTRY} has no embedded SVG "
+            "(unexpected icon pack layout)"
+        )
 
-    current_search_target_path = bytes(search_target_fields[search_target_path_index][2])
-    current_ask_target_path = bytes(ask_target_fields[ask_target_path_index][2])
-    openai_ask_path = build_custom_svg_icon_payload(
-        current_ask_target_path,
-        OPENAI_UXWING_SVG_PATH,
-    )
+    desired_search_svg = build_google_g_svg_text(source_path)
+    desired_ask_svg = build_openai_svg_text()
 
     updates: list[str] = []
-    if current_search_target_path != google_g_path:
-        search_target_fields[search_target_path_index][2] = google_g_path
+    if current_search_svg != desired_search_svg:
+        search_target_fields = set_icon_entry_svg(search_target_fields, desired_search_svg)
         top_fields[search_target_index][2] = encode_proto_fields(search_target_fields)
-        updates.append("copysearch search icon -> generated Google G icon")
-    if current_ask_target_path != openai_ask_path:
-        ask_target_fields[ask_target_path_index][2] = openai_ask_path
+        updates.append("copysearch search icon -> Google G SVG")
+    if current_ask_svg != desired_ask_svg:
+        ask_target_fields = set_icon_entry_svg(ask_target_fields, desired_ask_svg)
         top_fields[ask_target_index][2] = encode_proto_fields(ask_target_fields)
-        updates.append("copysearch ask-ai icon -> UXWing OpenAI icon")
+        updates.append("copysearch ask-ai icon -> UXWing OpenAI SVG")
 
     if not updates:
         return (

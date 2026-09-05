@@ -14,18 +14,16 @@ from shared_patchlib import (
     ASK_CHATGPT_LABEL_WITH_ARG,
     ASK_CHATGPT_LABEL_WITH_ARG_GUILLEMETS,
     ICON_PACK_FILES,
-    LEGACY_PATCHED_LABEL,
-    NEW_LABEL,
-    OLD_LABEL,
-    PREVIOUS_NEW_LABEL,
-    SEARCH_REPLACEMENTS,
+    INSTASERP_FLAG,
     default_yandex_root,
     ensure_instaserp,
     make_backup,
+    patch_context_menu_label,
     patch_copysearch_icon_pack,
     patch_multi,
     patch_unique,
     resolve_app_version,
+    SEARCH_REPLACEMENTS,
 )
 
 
@@ -70,27 +68,8 @@ def patch_ru_pak_context_only(path: Path) -> list[str]:
     data = path.read_bytes()
     logs: list[str] = []
 
-    old_count = data.count(OLD_LABEL)
-    legacy_count = data.count(LEGACY_PATCHED_LABEL)
-    previous_new_count = data.count(PREVIOUS_NEW_LABEL)
-    new_count = data.count(NEW_LABEL)
-
-    if old_count == 1 and legacy_count == 0 and previous_new_count == 0 and new_count == 0:
-        data = data.replace(OLD_LABEL, NEW_LABEL, 1)
-        logs.append("patched (context_menu_label from stock)")
-    elif old_count == 0 and legacy_count >= 1 and previous_new_count == 0 and new_count == 0:
-        data = data.replace(LEGACY_PATCHED_LABEL, NEW_LABEL, 1)
-        logs.append("patched (context_menu_label migrated from legacy padded label)")
-    elif old_count == 0 and legacy_count == 0 and previous_new_count >= 1 and new_count == 0:
-        data = data.replace(PREVIOUS_NEW_LABEL, NEW_LABEL, 1)
-        logs.append("patched (context_menu_label migrated from previous patched label)")
-    elif old_count == 0 and legacy_count == 0 and previous_new_count == 0 and new_count >= 1:
-        logs.append("already patched (context_menu_label)")
-    else:
-        raise ValueError(
-            "Unexpected pattern count for context_menu_label: "
-            f"old={old_count}, legacy={legacy_count}, previous={previous_new_count}, new={new_count}"
-        )
+    data, label_msg = patch_context_menu_label(data)
+    logs.append(label_msg)
 
     data, ask_with_arg_msg = patch_multi(
         data,

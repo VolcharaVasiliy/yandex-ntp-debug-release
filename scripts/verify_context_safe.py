@@ -12,6 +12,9 @@ from shared_patchlib import (
     ASK_CHATGPT_LABEL,
     ASK_CHATGPT_LABEL_WITH_ARG,
     ASK_CHATGPT_LABEL_WITH_ARG_GUILLEMETS,
+    CONTEXT_JOINT_PATCHED,
+    CONTEXT_JOINT_PATCHED_LABEL_ONLY,
+    CONTEXT_JOINT_STOCK,
     ICON_PACK_FILES,
     INSTASERP_FLAG,
     LEGACY_PATCHED_LABEL,
@@ -63,9 +66,13 @@ def verify_browser_dll_context_only(path: Path) -> tuple[bool, list[str]]:
 
 def verify_ru_pak_context_only(path: Path) -> tuple[bool, list[str]]:
     data = path.read_bytes()
+    joint_patched = (
+        data.count(CONTEXT_JOINT_PATCHED_LABEL_ONLY) + data.count(CONTEXT_JOINT_PATCHED)
+    )
     checks = [
-        ("context_menu_label", data.count(OLD_LABEL) == 0 and data.count(LEGACY_PATCHED_LABEL) == 0 and data.count(PREVIOUS_NEW_LABEL) == 0 and data.count(NEW_LABEL) >= 1,
-         f"old={data.count(OLD_LABEL)}, legacy={data.count(LEGACY_PATCHED_LABEL)}, previous={data.count(PREVIOUS_NEW_LABEL)}, new={data.count(NEW_LABEL)}"),
+        ("context_menu_label",
+         data.count(CONTEXT_JOINT_STOCK) == 0 and data.count(LEGACY_PATCHED_LABEL) == 0 and data.count(PREVIOUS_NEW_LABEL) == 0 and data.count(NEW_LABEL) >= 1 and joint_patched >= 1,
+         f"old={data.count(OLD_LABEL)}, legacy={data.count(LEGACY_PATCHED_LABEL)}, previous={data.count(PREVIOUS_NEW_LABEL)}, new={data.count(NEW_LABEL)}, joint_stock={data.count(CONTEXT_JOINT_STOCK)}, joint_patched={joint_patched}"),
         ("ask_ai_button_label", data.count(ASK_ALICE_LABEL) == 0 and data.count(ASK_CHATGPT_LABEL) >= 1,
          f"old={data.count(ASK_ALICE_LABEL)}, new={data.count(ASK_CHATGPT_LABEL)}"),
         ("ask_ai_button_label_with_arg", data.count(ASK_ALICE_LABEL_WITH_ARG) == 0 and data.count(ASK_CHATGPT_LABEL_WITH_ARG) >= 1,
